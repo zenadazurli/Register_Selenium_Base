@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# app.py - Versione con register_config.json
+# app.py - Versione con rotazione IP (max 3 account per IP)
 
 import requests
 import json
@@ -22,6 +22,11 @@ VALID_KEYS = [
 BROWSERLESS_URL = "https://production-sfo.browserless.io/chrome/bql"
 OUTPUT_DIR = "/tmp/easyhits4u"
 REFERER_URL = "https://www.easyhits4u.com/?ref=nicolacaporale"
+
+# ==================== LIMITI IP ====================
+MAX_ACCOUNTS_PER_IP = 3
+accounts_on_current_ip = 0
+current_session_id = None
 
 # ==================== MAIL.TM CONFIG ====================
 MAIL_EMAIL = "paolocrescentini@dollicons.com"
@@ -56,7 +61,113 @@ def build_email(username, email_local, email_domain):
     """Costruisce email nel formato: email_local+username@email_domain"""
     return f"{email_local}+{username}@{email_domain}"
 
-# ==================== MAIL.TM FUNCTIONS ====================
+def get_next_session_id():
+    """Genera un nuovo ID sessione per il cambio IP"""
+    global current_session_id, accounts_on_current_ip
+    current_session_id = random.randint(10000, 99999)
+    accounts_on_current_ip = 0
+    log(f"🔄 Nuova sessione IP: {current_session_id}")
+    return current_session_id
+
+def get_browserless_url_with_session(api_key):
+    """Costruisce URL con session ID per cambio IP"""
+    global current_session_id, accounts_on_current_ip
+    
+    if current_session_id is None or accounts_on_current_ip >= MAX_ACCOUNTS_PER_IP:
+        get_next_session_id()
+    
+    # Aggiungi session param per cambiare IP
+    session_param = f"&session={current_session_id}"
+    bql_url = f"{BROWSERLESS_URL}?token={api_key}&stealth=true&proxy=residential&proxyCountry=it{session_param}"
+    
+    return bql_url
+
+def get_cf_token(api_key):
+    """Ottiene CF token con rotazione IP automatica"""
+    global accounts_on_current_ip
+    
+    bql_url = get_browserless_url_with_session(api_key)
+    log(f"   Session IP: {current_session_id} (account {accounts_on_current_ip+1}/{MAX_ACCOUNTS_PER_IP})")
+    
+    query = """
+    mutation {
+      goto(url: "https://www.easyhits4u.com/?join_popup_show=1", waitUntil: networkIdle) {
+        status
+      }
+      solve(type: cloudflare, timeout: 45000) {
+        solved
+        token
+      }
+    }
+    """
+    
+    try:
+        response = requests.post(
+            bql_url,
+            json={"query": query},
+            headers={"Content-Type": "application/json"},
+            timeout=90
+        )
+        
+        if response.status_code == 401:
+            return None
+        elif response.status_code != 200:
+            return None
+        
+        data = response.json()
+        
+        if "errors" in data:
+            return None
+        
+        solve_info = data.get("data", {}).get("solve", {})
+        
+        if solve_info.get("solved"):
+            token = solve_info.get("token")
+            # Incrementa contatore account su questo IP
+            accounts_on_current_ip += 1
+            return token
+        return None
+            
+    except Exception:
+        return None
+
+def register_with_token(token, username, email, password):
+    """Registra usando il token"""
+    data = {
+        'f': 'join',
+        'a': 'join',
+        'name': username,
+        'email': email,
+        'login': username,
+        'pass': password,
+        'cpass': password,
+        'cf-turnstile-response': token
+    }
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/148.0',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': REFERER_URL,
+    }
+    
+    session = requests.Session()
+    session.get(REFERER_URL)
+    
+    response = session.post(
+        "https://www.easyhits4u.com/index.cgi",
+        data=data,
+        headers=headers,
+        allow_redirects=True,
+        timeout=30
+    )
+    
+    final_cookies = session.cookies.get_dict()
+    
+    if 'user_id' in final_cookies:
+        return final_cookies
+    return None
+
+# ==================== MAIL.TM CLASS ====================
 class MailTMActivator:
     def __init__(self):
         self.session = requests.Session()
@@ -182,86 +293,6 @@ class MailTMActivator:
         log("❌ Timeout: email di attivazione non arrivata")
         return False
 
-# ==================== BROWSERLESS FUNCTIONS ====================
-def get_cf_token(api_key):
-    """Ottiene CF token con una specifica chiave"""
-    bql_url = f"{BROWSERLESS_URL}?token={api_key}&stealth=true&proxy=residential&proxyCountry=it"
-    
-    query = """
-    mutation {
-      goto(url: "https://www.easyhits4u.com/?join_popup_show=1", waitUntil: networkIdle) {
-        status
-      }
-      solve(type: cloudflare, timeout: 45000) {
-        solved
-        token
-      }
-    }
-    """
-    
-    try:
-        response = requests.post(
-            bql_url,
-            json={"query": query},
-            headers={"Content-Type": "application/json"},
-            timeout=90
-        )
-        
-        if response.status_code == 401:
-            return None
-        elif response.status_code != 200:
-            return None
-        
-        data = response.json()
-        
-        if "errors" in data:
-            return None
-        
-        solve_info = data.get("data", {}).get("solve", {})
-        
-        if solve_info.get("solved"):
-            return solve_info.get("token")
-        return None
-            
-    except Exception:
-        return None
-
-def register_with_token(token, username, email, password):
-    """Registra usando il token"""
-    data = {
-        'f': 'join',
-        'a': 'join',
-        'name': username,
-        'email': email,
-        'login': username,
-        'pass': password,
-        'cpass': password,
-        'cf-turnstile-response': token
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/148.0',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': REFERER_URL,
-    }
-    
-    session = requests.Session()
-    session.get(REFERER_URL)
-    
-    response = session.post(
-        "https://www.easyhits4u.com/index.cgi",
-        data=data,
-        headers=headers,
-        allow_redirects=True,
-        timeout=30
-    )
-    
-    final_cookies = session.cookies.get_dict()
-    
-    if 'user_id' in final_cookies:
-        return final_cookies
-    return None
-
 # ==================== SALVATAGGIO ====================
 def save_account(username, email, password, cookies, activated=False):
     """Salva account in formato leggibile"""
@@ -272,6 +303,7 @@ def save_account(username, email, password, cookies, activated=False):
         "user_id": cookies.get('user_id'),
         "sesids": cookies.get('sesids'),
         "activated": activated,
+        "session_ip": current_session_id,
         "timestamp": datetime.now().isoformat()
     }
     
@@ -290,17 +322,21 @@ def save_account(username, email, password, cookies, activated=False):
     with open(accounts_file, "w") as f:
         json.dump(accounts, f, indent=2)
     
-    # Salva in TXT nel formato richiesto
+    # Salva in TXT
     status = "ATTIVATO" if activated else "IN ATTESA"
     with open(f"{OUTPUT_DIR}/accounts.txt", "a", encoding="utf-8") as f:
-        f.write(f"{email}    Password {password}    [{status}]\n")
+        f.write(f"{email}    Password {password}    [{status}]    IP: {current_session_id}\n")
     
-    log(f"💾 Account salvato: {email}    Password {password}")
+    log(f"💾 Account salvato: {email}")
 
 # ==================== MAIN ====================
 def main():
+    global accounts_on_current_ip, current_session_id
+    
     log("=" * 60)
     log("🚀 ACCOUNT CREATOR + ATTIVAZIONE AUTOMATICA")
+    log("=" * 60)
+    log(f"⚠️ Massimo {MAX_ACCOUNTS_PER_IP} account per IP (cambio automatico)")
     log("=" * 60)
     
     setup_output_dir()
@@ -311,11 +347,8 @@ def main():
         log(f"📁 Configurazione caricata:")
         log(f"   email_local: {email_local}")
         log(f"   email_domain: {email_domain}")
-        log(f"   password: {default_password}")
     except FileNotFoundError as e:
         log(f"❌ {e}")
-        log("   Crea il file register_config.json con:")
-        log('   {"email_local": "sandrominori50", "email_domain": "gmail.com", "password": "DDnmVV45!!"}')
         return
     
     try:
@@ -338,7 +371,12 @@ def main():
         log(f"📝 CREAZIONE ACCOUNT {i+1}/{num_accounts}")
         log(f"{'='*60}")
         
-        # Genera username e email nel formato richiesto
+        # Mostra stato IP
+        if current_session_id is None:
+            log(f"🌐 Primo IP - avvio nuova sessione")
+        else:
+            log(f"🌐 IP corrente: {current_session_id} ({accounts_on_current_ip}/{MAX_ACCOUNTS_PER_IP} account usati)")
+        
         username = generate_username()
         email = build_email(username, email_local, email_domain)
         
@@ -346,7 +384,7 @@ def main():
         log(f"📧 Email: {email}")
         log(f"🔑 Password: {default_password}")
         
-        # 1. Ottieni token
+        # 1. Ottieni token (con cambio IP automatico se necessario)
         token = None
         for attempt in range(len(VALID_KEYS)):
             api_key = VALID_KEYS[(key_index + attempt) % len(VALID_KEYS)]
@@ -383,6 +421,11 @@ def main():
             log(f"🎉 Account {i+1} completato (creato + attivato)!")
         else:
             log(f"⚠️ Account {i+1} creato ma NON attivato (timeout email)")
+        
+        # Se abbiamo raggiunto il limite di account per IP, forziamo cambio per il prossimo
+        if accounts_on_current_ip >= MAX_ACCOUNTS_PER_IP and i < num_accounts - 1:
+            log(f"⚠️ Raggiunto limite di {MAX_ACCOUNTS_PER_IP} account per IP")
+            log(f"🔄 Prossimo account userà un nuovo IP")
         
         if i < num_accounts - 1:
             pause = random.randint(30, 60)
