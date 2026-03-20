@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-# test_keys.py - Test semplice per verificare quali API key funzionano
+# test_keys.py - Test con query valida
 
 import requests
 import time
 
-# Lista delle tue API key
+# Lista delle tue API key (metti solo quelle che non hanno dato 401)
 API_KEYS = [
-    "2UBQ5qEPkTsCBv63a4077ae6c54e5490f1efd231f724e110f",
     "2UBQ8GwsajXwbXs10e72471480af4adaeb28a5a6a01ac89a7",
     "2UBQFmSYHD4NZGdb2f0eedc0e05b5de53a6746218bcdc139a",
     "2UBQLoR9eI8UsvL307891eb2aacfbb9a91978f37f010d2c29",
@@ -29,18 +28,17 @@ API_KEYS = [
 BROWSERLESS_URL = "https://production-sfo.browserless.io/chrome/bql"
 
 def test_key(api_key):
-    """Testa se una chiave funziona"""
+    """Testa se una chiave funziona con una query valida"""
     print(f"🔑 Test chiave: {api_key[:20]}...", end=" ", flush=True)
     
     bql_url = f"{BROWSERLESS_URL}?token={api_key}"
     
-    # Query minima per testare la connessione
+    # Query valida per testare la connessione
     query = """
-    query {
-      status {
-        available
-        queueLength
-        total
+    mutation {
+      goto(url: "https://www.easyhits4u.com", waitUntil: networkIdle) {
+        status
+        url
       }
     }
     """
@@ -50,17 +48,22 @@ def test_key(api_key):
             bql_url,
             json={"query": query},
             headers={"Content-Type": "application/json"},
-            timeout=15
+            timeout=30
         )
         
         if response.status_code == 200:
             data = response.json()
             if "errors" in data:
-                print(f"❌ Error: {data['errors'][0].get('message', 'Unknown')[:50]}")
-                return False
+                # Se l'errore è solo di sintassi ma la chiave è valida
+                error_msg = data['errors'][0].get('message', '')
+                if "Cannot query field" in error_msg:
+                    print("✅ Chiave valida (errore sintassi, non autenticazione)")
+                    return True
+                else:
+                    print(f"⚠️ Errore: {error_msg[:50]}")
+                    return False
             else:
-                status = data.get("data", {}).get("status", {})
-                print(f"✅ OK (available: {status.get('available', '?')})")
+                print("✅ Chiave valida!")
                 return True
         elif response.status_code == 401:
             print("❌ 401 - Chiave non valida/scaduta")
@@ -83,30 +86,25 @@ def main():
     print(f"📊 Chiavi da testare: {len(API_KEYS)}\n")
     
     working_keys = []
-    failed_keys = []
     
     for i, key in enumerate(API_KEYS, 1):
         print(f"[{i}/{len(API_KEYS)}] ", end="")
         if test_key(key):
             working_keys.append(key)
-        else:
-            failed_keys.append(key)
-        time.sleep(0.5)  # Pausa tra richieste
+        time.sleep(0.5)
     
     print("\n" + "=" * 60)
     print("📊 RISULTATI")
     print("=" * 60)
-    print(f"✅ Chiavi funzionanti: {len(working_keys)}")
+    print(f"✅ Chiavi valide: {len(working_keys)}")
     for key in working_keys:
-        print(f"   {key[:20]}...")
-    
-    print(f"\n❌ Chiavi non funzionanti: {len(failed_keys)}")
+        print(f"   {key}")
     
     if working_keys:
-        print("\n💡 Puoi usare queste chiavi:")
-        print(",".join(working_keys))
+        print("\n💡 Variabile d'ambiente da usare:")
+        print(f"BROWSERLESS_KEYS={','.join(working_keys)}")
     else:
-        print("\n⚠️ Nessuna chiave funzionante. Devi ottenere nuove chiavi.")
+        print("\n⚠️ Nessuna chiave valida trovata")
 
 if __name__ == "__main__":
     main()
