@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# app.py - Versione completa con 31 API key e rotazione IP
+# app.py - Versione completa con gestione IP ottimizzata
 
 import requests
 import json
@@ -57,6 +57,15 @@ MAIL_EMAIL = "paolocrescentini@dollicons.com"
 MAIL_PASSWORD = "HG65$!dava"
 MAIL_BASE_URL = "https://api.mail.tm"
 
+# ==================== STATISTICHE ====================
+stats = {
+    "total_attempts": 0,
+    "successful_registrations": 0,
+    "successful_activations": 0,
+    "ip_changes": 0,
+    "keys_used": {}
+}
+
 # ==================== FUNZIONI UTILITY ====================
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
@@ -87,10 +96,11 @@ def build_email(username, email_local, email_domain):
 
 def get_next_session_id():
     """Genera un nuovo ID sessione per il cambio IP"""
-    global current_session_id, accounts_on_current_ip
+    global current_session_id, accounts_on_current_ip, stats
     current_session_id = random.randint(10000, 99999)
     accounts_on_current_ip = 0
-    log(f"🔄 Nuova sessione IP: {current_session_id}")
+    stats["ip_changes"] += 1
+    log(f"🔄 NUOVO IP: Sessione {current_session_id} (cambio #{stats['ip_changes']})")
     return current_session_id
 
 def get_browserless_url_with_session(api_key):
@@ -111,7 +121,7 @@ def get_cf_token(api_key):
     global accounts_on_current_ip
     
     bql_url = get_browserless_url_with_session(api_key)
-    log(f"   Session IP: {current_session_id} (account {accounts_on_current_ip+1}/{MAX_ACCOUNTS_PER_IP})")
+    log(f"   🌐 IP: {current_session_id} | Account {accounts_on_current_ip+1}/{MAX_ACCOUNTS_PER_IP} | Chiave: {api_key[:20]}...")
     
     query = """
     mutation {
@@ -127,15 +137,17 @@ def get_cf_token(api_key):
     """
     
     try:
+        start_time = time.time()
         response = requests.post(
             bql_url,
             json={"query": query},
             headers={"Content-Type": "application/json"},
             timeout=120
         )
+        elapsed = time.time() - start_time
         
         if response.status_code == 401:
-            log(f"   ❌ Chiave 401 (non valida)")
+            log(f"   ❌ Chiave 401 (non valida/esaurita)")
             return None
         elif response.status_code != 200:
             log(f"   ❌ HTTP {response.status_code}")
@@ -152,7 +164,7 @@ def get_cf_token(api_key):
         if solve_info.get("solved"):
             token = solve_info.get("token")
             solve_time = solve_info.get("time", "?")
-            log(f"   ✅ Token ottenuto! ({len(token)} caratteri, tempo: {solve_time}ms)")
+            log(f"   ✅ Token ottenuto! ({len(token)} char, {solve_time}ms, totale {elapsed:.1f}s)")
             # Incrementa contatore account su questo IP
             accounts_on_current_ip += 1
             return token
@@ -200,7 +212,7 @@ def register_with_token(token, username, email, password):
     final_cookies = session.cookies.get_dict()
     
     if 'user_id' in final_cookies:
-        log(f"   ✅ Registrazione riuscita! user_id: {final_cookies['user_id']}")
+        log(f"   ✅ Registrazione OK! user_id: {final_cookies['user_id']}")
         return final_cookies
     else:
         log(f"   ❌ Registrazione fallita - URL: {response.url}")
@@ -224,7 +236,7 @@ class MailTMActivator:
                 raise Exception(f"Login fallito: {res.status_code}")
             token = res.json()["token"]
             self.session.headers.update({"Authorization": f"Bearer {token}"})
-            log("✅ Login Mail.tm completato")
+            log("✅ Login Mail.tm OK")
             return True
         except Exception as e:
             log(f"❌ Errore login Mail.tm: {e}")
@@ -274,7 +286,7 @@ class MailTMActivator:
         return None
     
     def activate_account(self, link):
-        log(f"🔄 Attivazione account...")
+        log(f"🔄 Attivazione...")
         try:
             r = requests.get(link, timeout=15, allow_redirects=True)
             final_url = r.url
@@ -289,7 +301,7 @@ class MailTMActivator:
             return False
     
     def wait_for_activation(self, timeout_minuti=4):
-        log(f"📧 In attesa email di attivazione per {self.target_email}...")
+        log(f"📧 Attesa email per {self.target_email}...")
         start = time.time()
         
         while time.time() - start < timeout_minuti * 60:
@@ -302,7 +314,7 @@ class MailTMActivator:
                         time.sleep(5)
                         continue
                     
-                    log(f"📧 Email trovata! Oggetto: {message['subject']}")
+                    log(f"📧 Email: {message['subject']}")
                     
                     res = self.session.get(f"{MAIL_BASE_URL}/messages/{msg_id}")
                     if res.status_code != 200:
@@ -315,26 +327,28 @@ class MailTMActivator:
                     link = self.extract_activation_link(body)
                     
                     if link:
-                        log(f"🔗 Link di attivazione trovato")
+                        log(f"🔗 Link attivazione trovato")
                         self.last_processed_id = msg_id
                         
                         success = self.activate_account(link)
                         return success
                     else:
-                        log("⚠️ Link non trovato nel messaggio")
+                        log("⚠️ Link non trovato")
                         
                 time.sleep(5)
                 
             except Exception as e:
-                log(f"⚠️ Errore durante polling: {e}")
+                log(f"⚠️ Polling error: {e}")
                 time.sleep(5)
         
-        log("❌ Timeout: email di attivazione non arrivata")
+        log("❌ Timeout attivazione")
         return False
 
 # ==================== SALVATAGGIO ====================
 def save_account(username, email, password, cookies, activated=False):
     """Salva account in formato leggibile"""
+    global stats
+    
     account_data = {
         "username": username,
         "email": email,
@@ -362,34 +376,35 @@ def save_account(username, email, password, cookies, activated=False):
         json.dump(accounts, f, indent=2)
     
     # Salva in TXT nel formato richiesto
-    status = "ATTIVATO" if activated else "IN ATTESA"
+    status = "✅ ATTIVATO" if activated else "⏳ IN ATTESA"
     with open(f"{OUTPUT_DIR}/accounts.txt", "a", encoding="utf-8") as f:
-        f.write(f"{email}    Password {password}    [{status}]    IP: {current_session_id}\n")
+        f.write(f"{email}    Password {password}    {status}    IP:{current_session_id}\n")
     
     log(f"💾 Account salvato: {email}")
+    
+    if activated:
+        stats["successful_activations"] += 1
 
 # ==================== MAIN ====================
 def main():
-    global accounts_on_current_ip, current_session_id
+    global accounts_on_current_ip, current_session_id, stats
     
-    log("=" * 60)
-    log("🚀 ACCOUNT CREATOR + ATTIVAZIONE AUTOMATICA")
-    log("=" * 60)
+    log("=" * 70)
+    log("🚀 EASYHITS4U ACCOUNT CREATOR v2.0")
+    log("=" * 70)
     log(f"🔑 API key disponibili: {len(VALID_KEYS)}")
-    log(f"⚠️ Massimo {MAX_ACCOUNTS_PER_IP} account per IP (cambio automatico)")
-    log("=" * 60)
+    log(f"⚠️ Massimo {MAX_ACCOUNTS_PER_IP} account per IP")
+    log("=" * 70)
     
     setup_output_dir()
     
     # Carica configurazione
     try:
         email_local, email_domain, default_password = load_register_config()
-        log(f"📁 Configurazione caricata:")
-        log(f"   email_local: {email_local}")
-        log(f"   email_domain: {email_domain}")
+        log(f"📁 Config: {email_local}@{email_domain} | Pwd: {default_password}")
     except FileNotFoundError as e:
         log(f"❌ {e}")
-        log("   Crea il file register_config.json con:")
+        log("   Crea register_config.json:")
         log('   {"email_local": "sandrominori50", "email_domain": "gmail.com", "password": "DDnmVV45!!"}')
         return
     
@@ -410,33 +425,32 @@ def main():
     key_index = 0
     
     for i in range(num_accounts):
-        log(f"\n{'='*60}")
-        log(f"📝 CREAZIONE ACCOUNT {i+1}/{num_accounts}")
-        log(f"{'='*60}")
+        log(f"\n{'='*70}")
+        log(f"📝 ACCOUNT {i+1}/{num_accounts}")
+        log(f"{'='*70}")
         
         # Mostra stato IP
         if current_session_id is None:
-            log(f"🌐 Primo IP - avvio nuova sessione")
+            log(f"🌐 Nuovo IP in arrivo...")
         else:
-            log(f"🌐 IP corrente: {current_session_id} ({accounts_on_current_ip}/{MAX_ACCOUNTS_PER_IP} account usati)")
+            log(f"🌐 IP corrente: {current_session_id} ({accounts_on_current_ip}/{MAX_ACCOUNTS_PER_IP} usati)")
         
         username = generate_username()
         email = build_email(username, email_local, email_domain)
         
-        log(f"👤 Username: {username}")
-        log(f"📧 Email: {email}")
-        log(f"🔑 Password: {default_password}")
+        log(f"👤 {username}")
+        log(f"📧 {email}")
+        
+        stats["total_attempts"] += 1
         
         # 1. Ottieni token (prova tutte le chiavi)
         token = None
-        used_key = None
         for attempt in range(len(VALID_KEYS)):
             api_key = VALID_KEYS[(key_index + attempt) % len(VALID_KEYS)]
-            log(f"🔑 Tentativo con chiave: {api_key[:20]}...")
             token = get_cf_token(api_key)
             if token:
-                used_key = api_key
                 key_index = (key_index + attempt) % len(VALID_KEYS)
+                stats["keys_used"][api_key[:20]] = stats["keys_used"].get(api_key[:20], 0) + 1
                 break
             time.sleep(1)
         
@@ -451,6 +465,8 @@ def main():
             log(f"❌ Registrazione fallita")
             continue
         
+        stats["successful_registrations"] += 1
+        
         # 3. Attiva via email
         mail_activator.set_target_email(email)
         activated = mail_activator.wait_for_activation(timeout_minuti=4)
@@ -460,25 +476,34 @@ def main():
         
         if activated:
             success_count += 1
-            log(f"🎉 Account {i+1} completato (creato + attivato)!")
+            log(f"🎉 Account {i+1} COMPLETATO!")
         else:
-            log(f"⚠️ Account {i+1} creato ma NON attivato (timeout email)")
+            log(f"⚠️ Account {i+1} creato ma NON attivato")
         
-        # Se abbiamo raggiunto il limite di account per IP, forziamo cambio per il prossimo
-        if accounts_on_current_ip >= MAX_ACCOUNTS_PER_IP and i < num_accounts - 1:
-            log(f"⚠️ Raggiunto limite di {MAX_ACCOUNTS_PER_IP} account per IP")
-            log(f"🔄 Prossimo account userà un nuovo IP")
+        # Gestione cambio IP per prossimo account
+        if accounts_on_current_ip >= MAX_ACCOUNTS_PER_IP:
+            log(f"⚠️ Raggiunto limite {MAX_ACCOUNTS_PER_IP} account per IP")
+            log(f"🔄 Prossimo account userà NUOVO IP")
+            # Forza reset per il prossimo ciclo
+            current_session_id = None
+            accounts_on_current_ip = MAX_ACCOUNTS_PER_IP
         
         if i < num_accounts - 1:
             pause = random.randint(30, 60)
-            log(f"⏸️ Pausa di {pause} secondi...")
+            log(f"⏸️ Pausa {pause}s...")
             time.sleep(pause)
     
-    log("\n" + "=" * 60)
-    log(f"🏁 PROCESSO COMPLETATO!")
-    log(f"✅ Account creati e attivati: {success_count}/{num_accounts}")
-    log(f"📁 Output salvato in: {OUTPUT_DIR}/accounts.txt")
-    log("=" * 60)
+    # Statistiche finali
+    log("\n" + "=" * 70)
+    log("📊 STATISTICHE FINALI")
+    log("=" * 70)
+    log(f"✅ Account completati: {success_count}/{num_accounts}")
+    log(f"📈 Registrazioni: {stats['successful_registrations']}")
+    log(f"📧 Attivazioni: {stats['successful_activations']}")
+    log(f"🔄 Cambi IP: {stats['ip_changes']}")
+    log(f"🔑 Chiavi utilizzate: {len(stats['keys_used'])}")
+    log(f"📁 Output: {OUTPUT_DIR}/accounts.txt")
+    log("=" * 70)
 
 if __name__ == "__main__":
     main()
