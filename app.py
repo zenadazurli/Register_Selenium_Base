@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# app.py - Versione con rotazione IP (max 3 account per IP)
+# app.py - Versione completa con 31 API key e rotazione IP
 
 import requests
 import json
@@ -12,11 +12,35 @@ from pathlib import Path
 from urllib.parse import unquote
 
 # ==================== CONFIGURAZIONE ====================
+# TUTTE LE 31 API KEY BROWSERLESS
 VALID_KEYS = [
+    # Vecchie chiavi
     "2UBQ8GwsajXwbXs10e72471480af4adaeb28a5a6a01ac89a7",
     "2UBQFmSYHD4NZGdb2f0eedc0e05b5de53a6746218bcdc139a",
     "2UBQLoR9eI8UsvL307891eb2aacfbb9a91978f37f010d2c29",
     "2UBTTPRPN6PFjLQdd5799398b26caf3a026c8ec3a9f9e5ad0",
+    
+    # Nuove chiavi
+    "2UBnDTit4q9XEKDc5dd928eaaeeba1e19355f5790e6448609",
+    "2UBnGaSy3OUY3GQ62740ff8c64d0d4e59234618332e5879f6",
+    "2UBnL3CDkxjWE7Ef9fd7a3754e753f4a7df4a582343e67189",
+    "2UBnPb0EAl96VbQ6adf224ec4c56e12bb19959eea41b57455",
+    "2UBnUJVWwcmHbaH321b18bc4fa5cb527ff4bae25b410ea79b",
+    "2UBnajgrly8o8M366e5539887aed33147fc9e7d6adbffde28",
+    "2UBnenIqwlRCGjT61471ba64e010b673df4b93449efd24494",
+    "2UBniEYYrZzpzdDf30240c479a5f85cfe9221f154adac46f6",
+    "2UBnpegeItTC8i4a087228298c4fc589dc969a00d3c86baef",
+    "2UBntqTS8E2iYAca48bfa4bdb4a59a46c00767670378c200b",
+    "2UBoxxfROlib6N3bfe56f7ea2402f355a47734ad544c2d273",
+    "2UBp2zjSczUb9pK6bc8cadbafaa6c5145b82bcc4b765ff969",
+    "2UBpKxZ0VgVIu1zf279654e8504f7248833d1640727e0805d",
+    "2UBpOkJdxpfndxpc117cd35c83a5437b126f188e0859939b2",
+    "2UBpUGukRq5oz4U504e5e0c0a5dfaad68bf265f49874a4bcd",
+    "2UBpYiQZStmFIEB262f92847d674e3c606d7b3112cee932bc",
+    "2UBpgTLTEKG9IlFc5423ccd37cb069c09c5b4d002f97bb88f",
+    "2UBpkU9rUMQJelq3695f9c9f96e25aa4f19dad3ced3167776",
+    "2UBpsO76fPFcEHNdf43337716ff8d08bf50f9f41706b6b9f0",
+    "2UBpzRVHmDEMJszf1f584b4cf666130d2ec02f8c2c5cee474",
 ]
 
 BROWSERLESS_URL = "https://production-sfo.browserless.io/chrome/bql"
@@ -91,12 +115,13 @@ def get_cf_token(api_key):
     
     query = """
     mutation {
-      goto(url: "https://www.easyhits4u.com/?join_popup_show=1", waitUntil: networkIdle) {
+      goto(url: "https://www.easyhits4u.com/?join_popup_show=1", waitUntil: networkIdle, timeout: 60000) {
         status
       }
-      solve(type: cloudflare, timeout: 45000) {
+      solve(type: cloudflare, timeout: 60000) {
         solved
         token
+        time
       }
     }
     """
@@ -106,29 +131,40 @@ def get_cf_token(api_key):
             bql_url,
             json={"query": query},
             headers={"Content-Type": "application/json"},
-            timeout=90
+            timeout=120
         )
         
         if response.status_code == 401:
+            log(f"   ❌ Chiave 401 (non valida)")
             return None
         elif response.status_code != 200:
+            log(f"   ❌ HTTP {response.status_code}")
             return None
         
         data = response.json()
         
         if "errors" in data:
+            log(f"   ❌ Errore GraphQL: {data['errors'][0].get('message', 'Unknown')[:80]}")
             return None
         
         solve_info = data.get("data", {}).get("solve", {})
         
         if solve_info.get("solved"):
             token = solve_info.get("token")
+            solve_time = solve_info.get("time", "?")
+            log(f"   ✅ Token ottenuto! ({len(token)} caratteri, tempo: {solve_time}ms)")
             # Incrementa contatore account su questo IP
             accounts_on_current_ip += 1
             return token
-        return None
+        else:
+            log(f"   ❌ Token non risolto (found={solve_info.get('found')})")
+            return None
             
-    except Exception:
+    except requests.exceptions.Timeout:
+        log(f"   ❌ Timeout richiesta")
+        return None
+    except Exception as e:
+        log(f"   ❌ Errore: {e}")
         return None
 
 def register_with_token(token, username, email, password):
@@ -164,8 +200,11 @@ def register_with_token(token, username, email, password):
     final_cookies = session.cookies.get_dict()
     
     if 'user_id' in final_cookies:
+        log(f"   ✅ Registrazione riuscita! user_id: {final_cookies['user_id']}")
         return final_cookies
-    return None
+    else:
+        log(f"   ❌ Registrazione fallita - URL: {response.url}")
+        return None
 
 # ==================== MAIL.TM CLASS ====================
 class MailTMActivator:
@@ -249,7 +288,7 @@ class MailTMActivator:
             log(f"❌ Errore attivazione: {e}")
             return False
     
-    def wait_for_activation(self, timeout_minuti=3):
+    def wait_for_activation(self, timeout_minuti=4):
         log(f"📧 In attesa email di attivazione per {self.target_email}...")
         start = time.time()
         
@@ -322,7 +361,7 @@ def save_account(username, email, password, cookies, activated=False):
     with open(accounts_file, "w") as f:
         json.dump(accounts, f, indent=2)
     
-    # Salva in TXT
+    # Salva in TXT nel formato richiesto
     status = "ATTIVATO" if activated else "IN ATTESA"
     with open(f"{OUTPUT_DIR}/accounts.txt", "a", encoding="utf-8") as f:
         f.write(f"{email}    Password {password}    [{status}]    IP: {current_session_id}\n")
@@ -336,6 +375,7 @@ def main():
     log("=" * 60)
     log("🚀 ACCOUNT CREATOR + ATTIVAZIONE AUTOMATICA")
     log("=" * 60)
+    log(f"🔑 API key disponibili: {len(VALID_KEYS)}")
     log(f"⚠️ Massimo {MAX_ACCOUNTS_PER_IP} account per IP (cambio automatico)")
     log("=" * 60)
     
@@ -349,6 +389,8 @@ def main():
         log(f"   email_domain: {email_domain}")
     except FileNotFoundError as e:
         log(f"❌ {e}")
+        log("   Crea il file register_config.json con:")
+        log('   {"email_local": "sandrominori50", "email_domain": "gmail.com", "password": "DDnmVV45!!"}')
         return
     
     try:
@@ -357,11 +399,12 @@ def main():
         num_accounts = 1
     
     log(f"\n📊 Account da creare: {num_accounts}")
-    log(f"🔑 Chiavi browserless disponibili: {len(VALID_KEYS)}")
     
     # Inizializza Mail.tm
     mail_activator = MailTMActivator()
-    mail_activator.login()
+    if not mail_activator.login():
+        log("❌ Impossibile accedere a Mail.tm")
+        return
     
     success_count = 0
     key_index = 0
@@ -384,20 +427,21 @@ def main():
         log(f"📧 Email: {email}")
         log(f"🔑 Password: {default_password}")
         
-        # 1. Ottieni token (con cambio IP automatico se necessario)
+        # 1. Ottieni token (prova tutte le chiavi)
         token = None
+        used_key = None
         for attempt in range(len(VALID_KEYS)):
             api_key = VALID_KEYS[(key_index + attempt) % len(VALID_KEYS)]
             log(f"🔑 Tentativo con chiave: {api_key[:20]}...")
             token = get_cf_token(api_key)
             if token:
+                used_key = api_key
                 key_index = (key_index + attempt) % len(VALID_KEYS)
-                log(f"✅ Token ottenuto!")
                 break
-            time.sleep(2)
+            time.sleep(1)
         
         if not token:
-            log(f"❌ Nessuna chiave funzionante")
+            log(f"❌ Nessuna chiave funzionante dopo {len(VALID_KEYS)} tentativi")
             continue
         
         # 2. Registra
@@ -407,11 +451,9 @@ def main():
             log(f"❌ Registrazione fallita")
             continue
         
-        log(f"✅ Registrazione riuscita! user_id: {cookies['user_id']}")
-        
         # 3. Attiva via email
         mail_activator.set_target_email(email)
-        activated = mail_activator.wait_for_activation(timeout_minuti=3)
+        activated = mail_activator.wait_for_activation(timeout_minuti=4)
         
         # 4. Salva
         save_account(username, email, default_password, cookies, activated)
